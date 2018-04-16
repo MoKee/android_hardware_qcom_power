@@ -48,9 +48,6 @@
 #include "performance.h"
 #include "power-common.h"
 
-static int display_hint_sent;
-static int camera_hint_ref_count;
-
 static int current_power_profile = PROFILE_BALANCED;
 
 static int profile_high_performance[] = {
@@ -263,7 +260,6 @@ static int process_video_encode_hint(void *metadata)
 int power_hint_override(power_hint_t hint, void *data)
 {
     int ret_val = HINT_NONE;
-    int duration;
 
     if (hint == POWER_HINT_SET_PROFILE) {
         set_power_profile(*(int32_t *)data);
@@ -290,37 +286,7 @@ int power_hint_override(power_hint_t hint, void *data)
     return ret_val;
 }
 
-int set_interactive_override(int on)
+int set_interactive_override(int UNUSED(on))
 {
     return HINT_HANDLED; /* Don't excecute this code path, not in use */
-    char governor[80];
-
-    if (get_scaling_governor(governor, sizeof(governor)) == -1) {
-        ALOGE("Can't obtain scaling governor.");
-
-        return HINT_NONE;
-    }
-
-    if (!on) {
-        /* Display off */
-        if (is_interactive_governor(governor)) {
-            int resource_values[] = {}; /* dummy node */
-            if (!display_hint_sent) {
-                perform_hint_action(DISPLAY_STATE_HINT_ID,
-                resource_values, sizeof(resource_values)/sizeof(resource_values[0]));
-                display_hint_sent = 1;
-                ALOGI("Display Off hint start");
-                return HINT_HANDLED;
-            }
-        }
-    } else {
-        /* Display on */
-        if (is_interactive_governor(governor)) {
-            undo_hint_action(DISPLAY_STATE_HINT_ID);
-            display_hint_sent = 0;
-            ALOGI("Display Off hint stop");
-            return HINT_HANDLED;
-        }
-    }
-    return HINT_NONE;
 }

@@ -38,7 +38,7 @@
 #include <stdlib.h>
 
 #define LOG_TAG "QCOM PowerHAL"
-#include <utils/Log.h>
+#include <log/log.h>
 #include <hardware/hardware.h>
 #include <hardware/power.h>
 
@@ -48,10 +48,25 @@
 #include "performance.h"
 #include "power-common.h"
 
-static int display_hint_sent;
-static int display_hint2_sent;
 static int first_display_off_hint;
-extern int display_boost;
+
+/**
+ * If target is 8974pro:
+ *     return true
+ * else:
+ *     return false
+ */
+static bool is_target_8974pro(void)
+{
+    static bool is_8974pro = false;
+    int soc_id;
+
+    soc_id = get_soc_id();
+    if (soc_id == 194 || (soc_id >= 208 && soc_id <= 218))
+        is_8974pro = true;
+
+    return is_8974pro;
+}
 
 static int current_power_profile = PROFILE_BALANCED;
 
@@ -131,10 +146,38 @@ static void set_power_profile(int profile) {
     current_power_profile = profile;
 }
 
-void interaction(int duration, int num_args, int opt_list[]);
+static int resources_interaction_fling_boost[] = {
+    CPUS_ONLINE_MIN_3,
+    0x20F,
+    0x30F,
+    0x40F,
+    0x50F
+};
+
+static int resources_interaction_boost[] = {
+    CPUS_ONLINE_MIN_2,
+    0x20F,
+    0x30F,
+    0x40F,
+    0x50F
+};
+
+static int resources_launch[] = {
+    CPUS_ONLINE_MIN_3,
+    CPU0_MIN_FREQ_TURBO_MAX,
+    CPU1_MIN_FREQ_TURBO_MAX,
+    CPU2_MIN_FREQ_TURBO_MAX,
+    CPU3_MIN_FREQ_TURBO_MAX
+};
 
 int power_hint_override(power_hint_t hint, void *data)
 {
+    static struct timespec s_previous_boost_timespec;
+    struct timespec cur_boost_timespec;
+    long long elapsed_time;
+    static int s_previous_duration = 0;
+    int duration;
+
     if (hint == POWER_HINT_SET_PROFILE) {
         set_power_profile(*(int32_t *)data);
         return HINT_HANDLED;
@@ -146,50 +189,47 @@ int power_hint_override(power_hint_t hint, void *data)
         return HINT_HANDLED;
     }
 
-    if (hint == POWER_HINT_LAUNCH) {
-        int duration = 2000;
-        int resources[] = { CPUS_ONLINE_MIN_3,
-            CPU0_MIN_FREQ_TURBO_MAX, CPU1_MIN_FREQ_TURBO_MAX,
-            CPU2_MIN_FREQ_TURBO_MAX, CPU3_MIN_FREQ_TURBO_MAX };
+    switch (hint) {
+        case POWER_HINT_INTERACTION:
+        {
+            duration = 500; // 500ms by default
+            if (data) {
+                int input_duration = *((int*)data);
+                if (input_duration > duration) {
+                    duration = (input_duration > 5000) ? 5000 : input_duration;
+                }
+            }
 
-        interaction(duration, ARRAY_SIZE(resources), resources);
+            clock_gettime(CLOCK_MONOTONIC, &cur_boost_timespec);
 
-        return HINT_HANDLED;
-    }
+            elapsed_time = calc_timespan_us(s_previous_boost_timespec, cur_boost_timespec);
+            // don't hint if previous hint's duration covers this hint's duration
+            if ((s_previous_duration * 1000) > (elapsed_time + duration * 1000)) {
+                return HINT_HANDLED;
+            }
+            s_previous_boost_timespec = cur_boost_timespec;
+            s_previous_duration = duration;
 
-    if (hint == POWER_HINT_INTERACTION) {
-        int duration = 500, duration_hint = 0;
-        static struct timespec s_previous_boost_timespec;
-        struct timespec cur_boost_timespec;
-        long long elapsed_time;
-
-        if (data) {
-            duration_hint = *((int *)data);
-        }
-
-        duration = duration_hint > 0 ? duration_hint : 500;
-
-        clock_gettime(CLOCK_MONOTONIC, &cur_boost_timespec);
-        elapsed_time = calc_timespan_us(s_previous_boost_timespec, cur_boost_timespec);
-        if (elapsed_time > 750000)
-            elapsed_time = 750000;
-        // don't hint if it's been less than 250ms since last boost
-        // also detect if we're doing anything resembling a fling
-        // support additional boosting in case of flings
-        else if (elapsed_time < 250000 && duration <= 750)
+            if (duration >= 1500) {
+                interaction(duration, ARRAY_SIZE(resources_interaction_fling_boost),
+                        resources_interaction_fling_boost);
+            } else {
+                interaction(duration, ARRAY_SIZE(resources_interaction_boost),
+                        resources_interaction_boost);
+            }
             return HINT_HANDLED;
+        }
+        case POWER_HINT_LAUNCH:
+        {
+            duration = 2000;
 
-        s_previous_boost_timespec = cur_boost_timespec;
-
-        int resources[] = { (duration >= 2000 ? CPUS_ONLINE_MIN_3 : CPUS_ONLINE_MIN_2),
-            0x20F, 0x30F, 0x40F, 0x50F };
-
-        if (duration)
-            interaction(duration, ARRAY_SIZE(resources), resources);
-
-        return HINT_HANDLED;
+            interaction(duration, ARRAY_SIZE(resources_launch),
+                    resources_launch);
+            return HINT_HANDLED;
+        }
+        default:
+            break;
     }
-
     return HINT_NONE;
 }
 
@@ -209,43 +249,33 @@ int set_interactive_override(int on)
          * We need to be able to identify the first display off hint
          * and release the current lock holder
          */
-        if (display_boost) {
+        if (is_target_8974pro()) {
             if (!first_display_off_hint) {
                 undo_initial_hint_action();
                 first_display_off_hint = 1;
             }
             /* used for all subsequent toggles to the display */
-            if (!display_hint2_sent) {
-                undo_hint_action(DISPLAY_STATE_HINT_ID_2);
-                display_hint2_sent = 1;
-            }
+            undo_hint_action(DISPLAY_STATE_HINT_ID_2);
         }
 
-        if ((strncmp(governor, ONDEMAND_GOVERNOR, strlen(ONDEMAND_GOVERNOR)) == 0) &&
-                (strlen(governor) == strlen(ONDEMAND_GOVERNOR))) {
+        if (is_ondemand_governor(governor)) {
             int resource_values[] = {MS_500, SYNC_FREQ_600, OPTIMAL_FREQ_600, THREAD_MIGRATION_SYNC_OFF};
 
-            if (!display_hint_sent) {
-                perform_hint_action(DISPLAY_STATE_HINT_ID,
-                        resource_values, sizeof(resource_values)/sizeof(resource_values[0]));
-                display_hint_sent = 1;
-            }
+            perform_hint_action(DISPLAY_STATE_HINT_ID,
+                    resource_values, ARRAY_SIZE(resource_values));
 
             return HINT_HANDLED;
         }
     } else {
         /* Display on */
-        if (display_boost && display_hint2_sent) {
+        if (is_target_8974pro()) {
             int resource_values2[] = {CPUS_ONLINE_MIN_2};
             perform_hint_action(DISPLAY_STATE_HINT_ID_2,
-                    resource_values2, sizeof(resource_values2)/sizeof(resource_values2[0]));
-            display_hint2_sent = 0;
+                    resource_values2, ARRAY_SIZE(resource_values2));
         }
 
-        if ((strncmp(governor, ONDEMAND_GOVERNOR, strlen(ONDEMAND_GOVERNOR)) == 0) &&
-                (strlen(governor) == strlen(ONDEMAND_GOVERNOR))) {
+        if (is_ondemand_governor(governor)) {
             undo_hint_action(DISPLAY_STATE_HINT_ID);
-            display_hint_sent = 0;
 
             return HINT_HANDLED;
         }
