@@ -42,6 +42,8 @@ LOCAL_SRC_FILES := \
     list.c \
     hint-data.c
 
+LOCAL_HEADER_LIBRARIES += libutils_headers
+LOCAL_HEADER_LIBRARIES += libhardware_headers
 LOCAL_C_INCLUDES := external/libxml2/include \
                     external/icu/icu4c/source/common
 
