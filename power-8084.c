@@ -53,6 +53,7 @@ static int first_display_off_hint;
 
 static int current_power_profile = PROFILE_BALANCED;
 
+/* power save mode: max 2 CPUs, max 1.2 GHz */
 static int profile_power_save[] = {
     0x0A03,
     CPUS_ONLINE_MAX_LIMIT_2,
@@ -62,6 +63,7 @@ static int profile_power_save[] = {
     CPU3_MAX_FREQ_NONTURBO_MAX + 1
 };
 
+/* efficiency mode: max 2 CPUs, max 2.4 GHz */
 static int profile_bias_power[] = {
     0x0A03,
     CPUS_ONLINE_MAX_LIMIT_2,
@@ -71,6 +73,7 @@ static int profile_bias_power[] = {
     CPU3_MAX_FREQ_NONTURBO_MAX + 14,
 };
 
+/* quick mode: min 2 CPUs, min 1.1 GHz */
 static int profile_bias_performance[] = {
     CPUS_ONLINE_MIN_2,
     CPU0_MIN_FREQ_NONTURBO_MAX + 1,
@@ -79,6 +82,7 @@ static int profile_bias_performance[] = {
     CPU3_MIN_FREQ_NONTURBO_MAX + 1
 };
 
+/* performance mode: min 4 CPUs, min 1.5 GHz */
 static int profile_high_performance[] = {
     0x0901,
     CPUS_ONLINE_MIN_4,
@@ -131,29 +135,27 @@ static void set_power_profile(int profile)
     current_power_profile = profile;
 }
 
+/* fling boost: min 3 CPUs, min 1.1 GHz */
 static int resources_interaction_fling_boost[] = {
     CPUS_ONLINE_MIN_3,
-    0x20F,
-    0x30F,
-    0x40F,
-    0x50F
+    CPU0_MIN_FREQ_NONTURBO_MAX + 1,
+    CPU1_MIN_FREQ_NONTURBO_MAX + 1,
+    CPU2_MIN_FREQ_NONTURBO_MAX + 1,
+    CPU3_MIN_FREQ_NONTURBO_MAX + 1
 };
 
+/* interactive boost: min 2 CPUs, min 1.1 GHz */
 static int resources_interaction_boost[] = {
     CPUS_ONLINE_MIN_2,
-    0x20F,
-    0x30F,
-    0x40F,
-    0x50F
+    CPU0_MIN_FREQ_NONTURBO_MAX + 1,
+    CPU1_MIN_FREQ_NONTURBO_MAX + 1,
+    CPU2_MIN_FREQ_NONTURBO_MAX + 1,
+    CPU3_MIN_FREQ_NONTURBO_MAX + 1
 };
 
-static int resources_launch[] = {
-    CPUS_ONLINE_MIN_3,
-    CPU0_MIN_FREQ_TURBO_MAX,
-    CPU1_MIN_FREQ_TURBO_MAX,
-    CPU2_MIN_FREQ_TURBO_MAX,
-    CPU3_MIN_FREQ_TURBO_MAX
-};
+const int DEFAULT_INTERACTIVE_DURATION   =  200; /* ms */
+const int MIN_FLING_DURATION             = 1500; /* ms */
+const int MAX_INTERACTIVE_DURATION       = 5000; /* ms */
 
 int power_hint_override(power_hint_t hint, void *data)
 {
@@ -176,11 +178,12 @@ int power_hint_override(power_hint_t hint, void *data)
 
     switch (hint) {
         case POWER_HINT_INTERACTION:
-            duration = 500; // 500ms by default
+            duration = DEFAULT_INTERACTIVE_DURATION;
             if (data) {
                 int input_duration = *((int*)data);
                 if (input_duration > duration) {
-                    duration = (input_duration > 5000) ? 5000 : input_duration;
+                    duration = (input_duration > MAX_INTERACTIVE_DURATION) ?
+                            MAX_INTERACTIVE_DURATION : input_duration;
                 }
             }
 
@@ -194,18 +197,13 @@ int power_hint_override(power_hint_t hint, void *data)
             s_previous_boost_timespec = cur_boost_timespec;
             s_previous_duration = duration;
 
-            if (duration >= 1500) {
+            if (duration >= MIN_FLING_DURATION) {
                 interaction(duration, ARRAY_SIZE(resources_interaction_fling_boost),
                         resources_interaction_fling_boost);
             } else {
                 interaction(duration, ARRAY_SIZE(resources_interaction_boost),
                         resources_interaction_boost);
             }
-            return HINT_HANDLED;
-        case POWER_HINT_LAUNCH:
-            duration = 2000;
-            interaction(duration, ARRAY_SIZE(resources_launch),
-                    resources_launch);
             return HINT_HANDLED;
         default:
             break;
