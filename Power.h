@@ -23,7 +23,7 @@
 #else
 #include <android/hardware/power/1.1/IPower.h>
 #endif
-#include <vendor/lineage/power/1.0/ILineagePower.h>
+#include <vendor/mokee/power/1.0/IMoKeePower.h>
 #include <hidl/MQDescriptor.h>
 #include <hidl/Status.h>
 #include <hardware/power.h>
@@ -45,12 +45,12 @@ using ::android::hardware::power::V1_0::IPower;
 #else
 using ::android::hardware::power::V1_1::IPower;
 #endif
-using ::vendor::lineage::power::V1_0::ILineagePower;
-using ::vendor::lineage::power::V1_0::LineageFeature;
+using ::vendor::mokee::power::V1_0::IMoKeePower;
+using ::vendor::mokee::power::V1_0::MoKeeFeature;
 using ::android::hardware::Return;
 using ::android::hardware::Void;
 
-struct Power : public IPower, public ILineagePower {
+struct Power : public IPower, public IMoKeePower {
     // Methods from ::android::hardware::power::V1_0::IPower follow.
 
     Power();
@@ -67,8 +67,8 @@ struct Power : public IPower, public ILineagePower {
     Return<void> powerHintAsync(PowerHint hint, int32_t data) override;
 #endif
 
-    // Methods from ::vendor::lineage::power::V1_0::ILineagePower follow.
-    Return<int32_t> getFeature(LineageFeature feature) override;
+    // Methods from ::vendor::mokee::power::V1_0::IMoKeePower follow.
+    Return<int32_t> getFeature(MoKeeFeature feature) override;
 
     // Methods from ::android::hidl::base::V1_0::IBase follow.
 
