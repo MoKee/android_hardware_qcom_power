@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015, The Linux Foundation. All rights reserved.
  * Copyright (C) 2018 The LineageOS Project
  *
  * Redistribution and use in source and binary forms, with or without
@@ -50,8 +50,6 @@
 #include "performance.h"
 #include "power-common.h"
 
-#define MIN_VAL(X,Y) ((X>Y)?(Y):(X))
-
 const int kMaxInteractiveDuration = 5000; /* ms */
 const int kMinInteractiveDuration = 500; /* ms */
 const int kMinFlingDuration = 1500; /* ms */
@@ -61,33 +59,32 @@ static int video_encode_hint_sent;
 static int current_power_profile = PROFILE_BALANCED;
 
 static int profile_high_performance[] = {
-    ALL_CPUS_PWR_CLPS_DIS_V3, 0x1,
     SCHED_BOOST_ON_V3, 0x1,
-    SCHED_MOSTLY_IDLE_NR_RUN, 0x1,
-    SCHED_SPILL_NR_RUN, 0x1,
-    SCHED_RESTRICT_CLUSTER_SPILL, 0x0,
-    SCHED_GROUP_DOWN_MIGRATE, 0x5F,
-    SCHED_GROUP_UP_MIGRATE, 0x64,
+    ALL_CPUS_PWR_CLPS_DIS_V3, 0x1,
     CPUS_ONLINE_MIN_BIG, 0x4,
     MIN_FREQ_BIG_CORE_0, 0xFFF,
     MIN_FREQ_LITTLE_CORE_0, 0xFFF,
+    GPU_MIN_POWER_LEVEL, 0x1,
+    SCHED_PREFER_IDLE_DIS_V3, 0x1,
+    SCHED_SMALL_TASK, 0x1,
+    SCHED_MOSTLY_IDLE_NR_RUN, 0x1,
+    SCHED_MOSTLY_IDLE_LOAD, 0x1,
 };
 
 static int profile_power_save[] = {
-    CPUS_ONLINE_MAX_BIG, 0x2,
-    MAX_FREQ_BIG_CORE_0, 0x0,
-    MAX_FREQ_LITTLE_CORE_0, 0x0,
+    CPUS_ONLINE_MAX_BIG, 0x1,
+    MAX_FREQ_BIG_CORE_0, 0x3bf,
+    MAX_FREQ_LITTLE_CORE_0, 0x300,
 };
 
 static int profile_bias_power[] = {
-    CPUS_ONLINE_MAX_BIG, 0x2,
-    MAX_FREQ_BIG_CORE_0_RESIDX, 0x3,
-    MAX_FREQ_LITTLE_CORE_0_RESIDX, 0x1,
+    MAX_FREQ_BIG_CORE_0, 0x4B0,
+    MAX_FREQ_LITTLE_CORE_0, 0x300,
 };
 
 static int profile_bias_performance[] = {
-    MIN_FREQ_BIG_CORE_0_RESIDX, 0x3,
-    MIN_FREQ_LITTLE_CORE_0_RESIDX, 0x2,
+    CPUS_ONLINE_MAX_BIG, 0x4,
+    MIN_FREQ_BIG_CORE_0, 0x540,
 };
 
 #ifdef INTERACTION_BOOST
@@ -144,28 +141,9 @@ static int set_power_profile(int profile)
     return ret;
 }
 
-/**
- * Returns true if the target is SDM630.
- */
-static bool is_target_SDM630(void)
-{
-    static int is_SDM630 = -1;
-    int soc_id;
-
-    if (is_SDM630 >= 0)
-        return is_SDM630;
-
-    soc_id = get_soc_id();
-    is_SDM630 = soc_id == 318 || soc_id == 327;
-
-    return is_SDM630;
-}
-
 static void process_video_encode_hint(void *metadata)
 {
     char governor[80];
-    int resource_values[20];
-    int num_resources;
     struct video_encode_metadata_t video_encode_metadata;
 
     if (get_scaling_governor_check_cores(governor, sizeof(governor), CPU0) == -1) {
@@ -196,48 +174,17 @@ static void process_video_encode_hint(void *metadata)
 
     if (video_encode_metadata.state == 1) {
         if (is_interactive_governor(governor)) {
-            if (is_target_SDM630()) {
-                /*
-                   1. CPUfreq params
-                      - hispeed freq for big - 1113Mhz
-                      - go hispeed load for big - 95
-                      - above_hispeed_delay for big - 40ms
-                      - target loads - 95
-                      - nr_run - 5
-                   2. BusDCVS V2 params
-                      - Sample_ms of 10ms
-                 */
-                int res[] = {
-                    HISPEED_FREQ_BIG, 0x459,
-                    GO_HISPEED_LOAD_BIG, 0x5F,
-                    ABOVE_HISPEED_DELAY_BIG, 0x4,
-                    TARGET_LOADS_BIG, 0x5F,
-                    SCHED_SPILL_NR_RUN, 0X5,
-                    CPUBW_HWMON_SAMPLE_MS, 0xA
-                };
-                memcpy(resource_values, res, MIN_VAL(sizeof(resource_values), sizeof(res)));
-                num_resources = ARRAY_SIZE(res);
-            } else {
-                /*
-                   1. CPUfreq params
-                      - hispeed freq for little - 902Mhz
-                      - go hispeed load for little - 95
-                      - above_hispeed_delay for little - 40ms
-                   2. BusDCVS V2 params
-                      - Sample_ms of 10ms
-                 */
-                int res[] = {
-                    HISPEED_FREQ_LITTLE, 0x386,
-                    GO_HISPEED_LOAD_LITTLE, 0x5F,
-                    ABOVE_HISPEED_DELAY_LITTLE, 0x4,
-                    CPUBW_HWMON_SAMPLE_MS, 0xA
-                };
-                memcpy(resource_values, res, MIN_VAL(sizeof(resource_values), sizeof(res)));
-                num_resources = ARRAY_SIZE(res);
-            }
+            int resource_values[] = {
+                INT_OP_CLUSTER0_USE_SCHED_LOAD, 0x1,
+                INT_OP_CLUSTER1_USE_SCHED_LOAD, 0x1,
+                INT_OP_CLUSTER0_USE_MIGRATION_NOTIF, 0x1,
+                INT_OP_CLUSTER1_USE_MIGRATION_NOTIF, 0x1,
+                INT_OP_CLUSTER0_TIMER_RATE, BIG_LITTLE_TR_MS_40,
+                INT_OP_CLUSTER1_TIMER_RATE, BIG_LITTLE_TR_MS_40
+            };
             if (!video_encode_hint_sent) {
                 perform_hint_action(video_encode_metadata.hint_id,
-                        resource_values, num_resources);
+                        resource_values, ARRAY_SIZE(resource_values));
                 video_encode_hint_sent = 1;
             }
         }
@@ -282,7 +229,8 @@ static void process_interaction_hint(void *data)
     s_previous_duration = duration;
 
     if (duration >= kMinFlingDuration) {
-        perf_hint_enable_with_type(VENDOR_HINT_SCROLL_BOOST, -1, SCROLL_PREFILING);
+        // Use launch boost resources for fling boost
+        perf_hint_enable_with_type(VENDOR_HINT_FIRST_LAUNCH_BOOST, -1, LAUNCH_BOOST_V1);
     } else {
         perf_hint_enable_with_type(VENDOR_HINT_SCROLL_BOOST, duration, SCROLL_VERTICAL);
     }
@@ -292,7 +240,7 @@ int power_hint_override(power_hint_t hint, void *data)
 {
     if (hint == POWER_HINT_SET_PROFILE) {
         if (set_power_profile(*(int32_t *)data) < 0)
-            ALOGE("Setting power profile failed. perf HAL not started?");
+            ALOGE("Setting power profile failed. perfd not started?");
         return HINT_HANDLED;
     }
 
@@ -303,8 +251,6 @@ int power_hint_override(power_hint_t hint, void *data)
     }
 
     switch (hint) {
-        case POWER_HINT_VSYNC:
-            break;
         case POWER_HINT_VIDEO_ENCODE:
             process_video_encode_hint(data);
             return HINT_HANDLED;
@@ -323,8 +269,6 @@ int power_hint_override(power_hint_t hint, void *data)
 int set_interactive_override(int on)
 {
     char governor[80];
-    int resource_values[20];
-    int num_resources;
 
     if (get_scaling_governor_check_cores(governor, sizeof(governor), CPU0) == -1) {
         if (get_scaling_governor_check_cores(governor, sizeof(governor), CPU1) == -1) {
@@ -340,46 +284,13 @@ int set_interactive_override(int on)
     if (!on) {
         /* Display off. */
         if (is_interactive_governor(governor)) {
-            if (is_target_SDM630()) {
-                /*
-                   1. CPUfreq params
-                      - hispeed freq for big - 1113Mhz
-                      - go hispeed load for big - 95
-                      - above_hispeed_delay for big - 40ms
-                   2. BusDCVS V2 params
-                      - Sample_ms of 10ms
-                 */
-                int res[] = {
-                    HISPEED_FREQ_BIG, 0x459,
-                    GO_HISPEED_LOAD_BIG, 0x5F,
-                    ABOVE_HISPEED_DELAY_BIG, 0x4,
-                    CPUBW_HWMON_SAMPLE_MS, 0xA
-                };
-                memcpy(resource_values, res, MIN_VAL(sizeof(resource_values), sizeof(res)));
-                num_resources = ARRAY_SIZE(res);
-            } else {
-                /*
-                   1. CPUfreq params
-                      - hispeed freq for little - 902Mhz
-                      - go hispeed load for little - 95
-                      - above_hispeed_delay for little - 40ms
-                   2. BusDCVS V2 params
-                      - Sample_ms of 10ms
-                   3. Sched group upmigrate - 500
-                 */
-                int res[] =  {
-                    HISPEED_FREQ_LITTLE, 0x386,
-                    GO_HISPEED_LOAD_LITTLE, 0x5F,
-                    ABOVE_HISPEED_DELAY_LITTLE, 0x4,
-                    CPUBW_HWMON_SAMPLE_MS, 0xA,
-                    SCHED_GROUP_UP_MIGRATE, 0x1F4
-                };
-                memcpy(resource_values, res, MIN_VAL(sizeof(resource_values), sizeof(res)));
-                num_resources = ARRAY_SIZE(res);
-
-            }
+            int resource_values[] = {
+                INT_OP_CLUSTER0_TIMER_RATE, BIG_LITTLE_TR_MS_50,
+                INT_OP_CLUSTER1_TIMER_RATE, BIG_LITTLE_TR_MS_50,
+                INT_OP_NOTIFY_ON_MIGRATE, 0x00
+            };
             perform_hint_action(DISPLAY_STATE_HINT_ID,
-                    resource_values, num_resources);
+                    resource_values, ARRAY_SIZE(resource_values));
         }
     } else {
         /* Display on. */
